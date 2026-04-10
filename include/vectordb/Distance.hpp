@@ -6,7 +6,7 @@
 
 #if defined(__AVX512F__)
 #include <immintrin.h>
-#elif defined(__ARM_NEON)
+#elif defined(__ARM_NEON) && !defined(VECTORDB_DISABLE_NEON)
 #include <arm_neon.h>
 #endif
 
@@ -82,7 +82,7 @@ inline float DotProductAVX512(VectorView a, VectorView b) {
     return -res;
 }
 
-#elif defined(__ARM_NEON)
+#elif defined(__ARM_NEON) && !defined(VECTORDB_DISABLE_NEON)
 
 inline float L2SquaredNEON(VectorView a, VectorView b) {
   size_t n = a.size();
@@ -132,7 +132,7 @@ class DistanceCalculator {
       case MetricType::L2Squared:
 #if defined(__AVX512F__)
         return L2SquaredAVX512(a, b);
-#elif defined(__ARM_NEON)
+#elif defined(__ARM_NEON) && !defined(VECTORDB_DISABLE_NEON)
         return L2SquaredNEON(a, b);
 #else
         return L2SquaredScalar(a, b);
@@ -140,7 +140,7 @@ class DistanceCalculator {
       case MetricType::DotProduct:
 #if defined(__AVX512F__)
         return DotProductAVX512(a, b);
-#elif defined(__ARM_NEON)
+#elif defined(__ARM_NEON) && !defined(VECTORDB_DISABLE_NEON)
         return DotProductNEON(a, b);
 #else
         return DotProductScalar(a, b);

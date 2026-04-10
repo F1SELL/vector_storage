@@ -3,6 +3,7 @@ project(VectorDB VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+option(VECTORDB_DISABLE_NEON "Disable ARM NEON optimizations" OFF)
 
 if (MSVC)
     add_compile_options(/W4 /WX /permissive-)
@@ -19,6 +20,8 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
 endif ()
 
 include(FetchContent)
+include(GoogleTest)
+enable_testing()
 
 FetchContent_Declare(
         googletest
@@ -42,6 +45,9 @@ add_library(vectordb STATIC
 )
 
 target_include_directories(vectordb PUBLIC include)
+if (VECTORDB_DISABLE_NEON)
+    target_compile_definitions(vectordb PUBLIC VECTORDB_DISABLE_NEON=1)
+endif ()
 
 
 add_executable(vectordb_demo main.cpp)
@@ -49,6 +55,7 @@ target_link_libraries(vectordb_demo PRIVATE vectordb)
 
 add_executable(vectordb_test tests/test_index.cpp)
 target_link_libraries(vectordb_test PRIVATE vectordb gtest_main)
+gtest_discover_tests(vectordb_test)
 
 add_executable(vectordb_bench benchmarks/bench_index.cpp)
 target_link_libraries(vectordb_bench PRIVATE vectordb benchmark::benchmark)
