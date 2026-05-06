@@ -49,7 +49,6 @@ void run_benchmark() {
   end = std::chrono::high_resolution_clock::now();
   auto flat_search_time = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.0;
 
-  // Print Results
   std::cout << std::left << std::setw(15) << "Index"
             << std::setw(15) << "Build Time"
             << std::setw(25) << "Search Time (100 queries)" << "\n";
@@ -58,7 +57,6 @@ void run_benchmark() {
             << flat_build_time << " ms\t"
             << flat_search_time << " ms\n\n";
 
-  // Show a sample query result
   std::cout << "==========================================\n";
   std::cout << " Sample Query [0] Top-" << std::min<size_t>(5, k) << " Results\n";
   std::cout << "==========================================\n";

@@ -1,0 +1,112 @@
+name: VectorDB CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - build_type: Debug
+            sanitizers: ON
+          - build_type: Release
+            sanitizers: OFF
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DVECTORDB_ENABLE_SANITIZERS=${{ matrix.sanitizers }} \
+            -DVECTORDB_ENABLE_NATIVE_OPT=OFF
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Run benchmarks (Release only)
+        if: matrix.build_type == 'Release'
+        run: |
+          ./build/vectordb_bench \
+            --benchmark_repetitions=3 \
+            --benchmark_report_aggregates_only=true \
+            --benchmark_format=json \
+            --benchmark_out=build/bench_local.json
+
+      - name: Convert benchmark JSON to CSV (Release only)
+        if: matrix.build_type == 'Release'
+        run: |
+          python3 benchmarks/benchmark_to_csv.py build/bench_local.json build/bench_local.csv
+
+      - name: Upload benchmark artifact (Release only)
+        if: matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-local-json
+          path: build/bench_local.json
+
+      - name: Upload benchmark CSV artifact (Release only)
+        if: matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-local-csv
+          path: build/bench_local.csv
+
+  compare-with-ydb:
+    runs-on: ubuntu-24.04
+    needs: build-and-test
+    if: ${{ secrets.YDB_ENDPOINT != '' && secrets.YDB_DATABASE != '' && secrets.YDB_BENCH_SQL != '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install YDB dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r benchmarks/requirements.txt
+
+      - name: Configure release build
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVECTORDB_ENABLE_NATIVE_OPT=OFF
+
+      - name: Build release binaries
+        run: cmake --build build --parallel
+
+      - name: Run local HNSW benchmark
+        run: |
+          ./build/vectordb_bench \
+            --benchmark_filter=HnswIndex_Search \
+            --benchmark_repetitions=5 \
+            --benchmark_report_aggregates_only=true \
+            --benchmark_format=json \
+            --benchmark_out=build/bench_local_hnsw.json
+
+      - name: Compare with YDB
+        env:
+          YDB_ENDPOINT: ${{ secrets.YDB_ENDPOINT }}
+          YDB_DATABASE: ${{ secrets.YDB_DATABASE }}
+          YDB_TOKEN: ${{ secrets.YDB_TOKEN }}
+          YDB_BENCH_SQL: ${{ secrets.YDB_BENCH_SQL }}
+        run: |
+          python benchmarks/ydb_compare.py \
+            --local-benchmark-json build/bench_local_hnsw.json \
+            --max-ratio 1.15 \
+            --runs 30

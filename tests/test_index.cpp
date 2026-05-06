@@ -3,6 +3,7 @@
 #include "vectordb/HnswIndex.hpp"
 #include <algorithm>
 #include <random>
+#include <unordered_set>
 
 namespace vectordb::tests {
 
@@ -63,18 +64,81 @@ TEST_F(IndexTest, DimensionMismatchThrows) {
       std::invalid_argument);
 }
 
-TEST_F(IndexTest, HnswIsStubAndThrowsOnSearch) {
+TEST_F(IndexTest, HnswExactMatchIsTop1) {
+  HnswIndex::Config config;
+  config.ef_search = 100;
+  config.ef_construction = 200;
+  HnswIndex index(dim, MetricType::L2Squared, config);
+
+  for (size_t i = 0; i < num_vectors; ++i) {
+    index.AddVector(i, VectorView(data[i].data(), dim));
+  }
+
+  auto results = index.Search(VectorView(data[123].data(), dim), 1);
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0].label, 123);
+}
+
+TEST_F(IndexTest, HnswRecallVsFlatIsHighOnRandomData) {
+  HnswIndex::Config config;
+  config.ef_search = 100;
+  config.ef_construction = 200;
+  HnswIndex hnsw(dim, MetricType::L2Squared, config);
+  FlatIndex flat(dim, MetricType::L2Squared);
+
+  for (size_t i = 0; i < num_vectors; ++i) {
+    hnsw.AddVector(i, VectorView(data[i].data(), dim));
+    flat.AddVector(i, VectorView(data[i].data(), dim));
+  }
+
+  const size_t k = 10;
+  const size_t queries = 100;
+  size_t hit_count = 0;
+
+  for (size_t i = 0; i < queries; ++i) {
+    size_t qid = (i * 17) % num_vectors;
+    auto exact = flat.Search(VectorView(data[qid].data(), dim), k);
+    auto approx = hnsw.Search(VectorView(data[qid].data(), dim), k);
+
+    std::unordered_set<LabelType> exact_labels;
+    for (const auto& res : exact) {
+      exact_labels.insert(res.label);
+    }
+    for (const auto& res : approx) {
+      if (exact_labels.contains(res.label)) {
+        ++hit_count;
+      }
+    }
+  }
+
+  double recall = static_cast<double>(hit_count) / static_cast<double>(queries * k);
+  EXPECT_GE(recall, 0.90);
+}
+
+TEST_F(IndexTest, HnswHandlesEmptyAndKZero) {
   HnswIndex index(dim, MetricType::L2Squared);
+  auto empty = index.Search(VectorView(data[0].data(), dim), 10);
+  EXPECT_TRUE(empty.empty());
+
   for (size_t i = 0; i < 10; ++i) {
     index.AddVector(i, VectorView(data[i].data(), dim));
   }
-  EXPECT_EQ(index.Size(), 10);
+
+  auto zero_k = index.Search(VectorView(data[0].data(), dim), 0);
+  EXPECT_TRUE(zero_k.empty());
+}
+
+TEST_F(IndexTest, HnswDimensionMismatchThrows) {
+  HnswIndex index(dim, MetricType::L2Squared);
+  std::vector<float> bad_vec(dim + 1, 0.0f);
+
+  EXPECT_THROW(index.AddVector(1, VectorView(bad_vec.data(), bad_vec.size())), std::invalid_argument);
   EXPECT_THROW(
       {
-        auto res = index.Search(VectorView(data[0].data(), dim), 5);
+        auto res = index.Search(VectorView(bad_vec.data(), bad_vec.size()), 1);
         (void)res;
       },
-      std::logic_error);
+      std::invalid_argument);
 }
 
 } // namespace vectordb::tests

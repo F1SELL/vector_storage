@@ -1,87 +1,118 @@
-# VectorDB Core
+# Отчет по лабораторной работе: VectorDB (FlatIndex + HNSW + сравнение с YDB)
 
-Минимальный in-memory движок векторного поиска на C++23.
+## 1. Цель работы
 
-## Текущий статус проекта
+Цель - реализовать in-memory векторный поиск на C++ (FlatIndex и HNSW), измерить производительность, сравнить SIMD vs scalar путь и сопоставить локальный HNSW с ANN в YDB. Важное требование — воспроизводимые бенчмарки, графики и понятная интерпретация результата.
 
-- `FlatIndex` — полностью рабочий точный индекс (brute-force).
-- `HnswIndex` — заготовка публичного API для следующего этапа:
-  - `AddVector()` реализован;
-  - `Search()` пока не реализован и выбрасывает `std::logic_error`.
+## 2. Реализация
 
-## Что сейчас работает
+### 2.1 FlatIndex
 
-### 1) `FlatIndex`
+- Полный перебор по всем векторам.
+- Сортировка top-k по расстоянию.
+- Сложность поиска: `O(N · D)`.
 
-`FlatIndex` хранит все векторы в непрерывном массиве `float` и выполняет полный перебор:
+### 2.2 HNSW
 
-1. для каждого вектора в базе считает расстояние до запроса;
-2. поддерживает top-`k` через `priority_queue`;
-3. возвращает результаты, отсортированные по возрастанию дистанции.
+- Многоуровневый граф (entry point, greedy descent, поиск по слою).
+- Используется `ef_search` и `ef_construction`.
+- Сложность поиска: примерно `O(ef_search · log N)`.
 
-Сложность поиска: `O(N * D)`, где:
-- `N` — число векторов в индексе,
-- `D` — размерность вектора.
+### 2.3 Метрика и SIMD
 
-### 2) Метрики расстояния
+- Метрики: `L2Squared`, `DotProduct`, `Cosine`.
+- SIMD ускорение:
+    - AVX-512 на x86,
+    - NEON на ARM.
+- Для сравнения добавлен флаг `-DVECTORDB_DISABLE_SIMD=ON`.
 
-Поддержаны:
-- `L2Squared`
-- `DotProduct` (как расстояние `-dot`)
-- `Cosine`
+## 3. Методика эксперимента
 
-### 3) SIMD-ускорение
+Используются три сценария:
 
-Для `L2Squared` и `DotProduct`:
-- AVX-512 на x86 (`__AVX512F__`);
-- NEON на ARM (`__ARM_NEON`).
+1) **SIMD vs scalar** - сравнение влияния SIMD на FlatIndex и HNSW.\
+2) **FlatIndex vs HNSW (SIMD)** - сравнение алгоритмов на одном уровне оптимизации.\
+3) **HNSW SIMD vs YDB ANN** - сравнение in-memory поиска с распределенной БД YDB.
 
-Для ARM добавлен переключатель:
-- `-DVECTORDB_DISABLE_NEON=OFF` — NEON включен;
-- `-DVECTORDB_DISABLE_NEON=ON` — NEON принудительно выключен (scalar path).
+### Параметры бенчмарка
 
-## Тесты
+- Размерность: `D = 128`.
+- Top-k: `k = 10`.
+- Наборы: `N = 100 / 1000 / 10000`.
+- HNSW: `M=16`, `ef_construction=200`, `ef_search=50`.
 
-Тесты покрывают:
-- точное попадание в себя для `FlatIndex` (дистанция ~ 0);
-- корректную сортировку top-`k` по расстоянию;
-- проверки на mismatch размерности;
-- поведение заготовки `HnswIndex` (бросает `logic_error` в `Search`).
+## 4. Результаты (локальные бенчмарки)
 
-Фактический результат последнего прогона:
-- `4/4` теста пройдено;
-- `0` падений.
+### 4.1 SIMD vs scalar (мс)
 
-Команды:
+| N | FlatIndex SIMD | FlatIndex scalar | Speedup | HNSW SIMD | HNSW scalar | Speedup |
+|---|---:|---:|---:|---:|---:|---:|
+| 100 | 0.00237 | 0.00531 | ~2.24x | 0.00412 | 0.00805 | ~1.95x |
+| 1000 | 0.04318 | 0.11204 | ~2.59x | 0.01968 | 0.04307 | ~2.19x |
+| 10000 | 0.24373 | 0.50269 | ~2.06x | 0.03567 | 0.08607 | ~2.41x |
 
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build -j
-ctest --test-dir build --output-on-failure
-```
+**Вывод:** SIMD дает стабильное ускорение ~2x как для FlatIndex, так и для HNSW.
 
-## Бенчмарк и замеры NEON
+![Сравнение SIMD и Scalar](output_graphs/simd_vs_scalar/latency_vs_dataset.png)
+![Сравнение SIMD и Scalar](output_graphs/simd_vs_scalar/speedup_ratio.png)
 
-Используется `vectordb_bench` (`google/benchmark`), сценарий: `FlatIndex_Search`.
+### 4.2 FlatIndex vs HNSW (SIMD)
 
-Запуск:
-
-```bash
-cmake -S . -B build-neon-on -DCMAKE_BUILD_TYPE=Release -DVECTORDB_DISABLE_NEON=OFF
-cmake --build build-neon-on -j
-./build-neon-on/vectordb_bench --benchmark_repetitions=5 --benchmark_report_aggregates_only=true
-
-cmake -S . -B build-neon-off -DCMAKE_BUILD_TYPE=Release -DVECTORDB_DISABLE_NEON=ON
-cmake --build build-neon-off -j
-./build-neon-off/vectordb_bench --benchmark_repetitions=5 --benchmark_report_aggregates_only=true
-```
-
-### Результаты (CPU mean)
-
-| N (размер базы) | NEON ON | NEON OFF | Ускорение |
+| N | FlatIndex SIMD | HNSW SIMD | Speedup (Flat/HNSW) |
 |---|---:|---:|---:|
-| 100 | 2316 ns | 5604 ns | ~2.42x |
-| 1000 | 15992 ns | 51976 ns | ~3.25x |
-| 10000 | 143503 ns | 502306 ns | ~3.50x |
+| 100 | 0.00237 | 0.00412 | ~0.58x |
+| 1000 | 0.04318 | 0.01968 | ~2.19x |
+| 10000 | 0.24373 | 0.03567 | ~6.83x |
 
-Вывод: на ARM включенный NEON дает стабильное ускорение поиска `FlatIndex`, особенно на больших `N`.
+**Вывод:** на малых N HNSW проигрывает из-за overhead, но на больших N дает существенный выигрыш.
+
+![Сравнение Flat и HNSW](output_graphs/flat_vs_hnsw_simd/latency_vs_dataset.png)
+![Сравнение Flat и HNSW](output_graphs/flat_vs_hnsw_simd/speedup_ratio.png)
+
+## 5. Сравнение с YDB ANN
+
+YDB использует распределенную архитектуру и сетевую коммуникацию, поэтому сравнение с in-memory индексом корректно только при одинаковых параметрах (D, k, датасет) и интерпретируется как сравнение систем разных классов.
+
+### Измерения (YDB)
+
+- `N = 10000`, median = **46.736 ms** (из `bench_ydb.csv`).
+
+### Сравнение с HNSW SIMD
+
+- HNSW SIMD (N=10000): **0.0357 ms**.
+- YDB ANN (N=10000): **46.7 ms**.
+
+Отношение ~**1300x**, что объясняется сетевым overhead и транзакционным контуром YDB.
+
+**Вывод:** для локального in-memory поиска HNSW существенно быстрее. YDB выигрывает в масштабируемости, доступности и работе с очень большими датасетами за счет распределения.
+
+![Сравнение HNSW и ANN (YDB)](output_graphs/flat_vs_hnsw_simd/latency_vs_dataset.png)
+
+
+## 6. Воспроизводимость
+
+Для воспроизведения всех трех сценариев используется один скрипт:
+
+```bash
+bash benchmarks/run_all_benchmarks.sh --install-deps --load-ydb --ydb-truncate \
+  --ydb-rows 10000 \
+  --table vectors \
+  --index ann_index \
+  --dim 128 \
+  --k 10 \
+  --queries 100 \
+  --warmup 10 \
+  --dataset-sizes 10000
+```
+
+Графики сохраняются в `output_graphs/`:
+- `simd_vs_scalar/`
+- `flat_vs_hnsw_simd/`
+- `hnsw_vs_ydb/`
+
+## 7. Итог
+
+- Реализованы FlatIndex и HNSW, соблюдены требования к производительности и тестам.
+- SIMD дает устойчивый прирост ~2x.
+- HNSW превосходит FlatIndex на больших N.
+- Сравнение с YDB корректно демонстрирует различия in-memory и распределенной БД.

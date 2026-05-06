@@ -41,7 +41,10 @@ BENCHMARK_DEFINE_F(IndexFixture, FlatIndex_Search)(benchmark::State& state) {
 }
 
 BENCHMARK_DEFINE_F(IndexFixture, HnswIndex_Search)(benchmark::State& state) {
-  HnswIndex index(dim, MetricType::L2Squared);
+  HnswIndex::Config config;
+  config.ef_search = 50;
+  config.ef_construction = 200;
+  HnswIndex index(dim, MetricType::L2Squared, config);
   for (size_t i = 0; i < data.size(); ++i) {
     index.AddVector(i, VectorView(data[i].data(), dim));
   }
@@ -55,7 +58,9 @@ BENCHMARK_DEFINE_F(IndexFixture, HnswIndex_Search)(benchmark::State& state) {
 }
 
 BENCHMARK_REGISTER_F(IndexFixture, FlatIndex_Search)
-->RangeMultiplier(10)->Range(100, 10000)->Complexity(benchmark::oN);
+    ->RangeMultiplier(10)->Range(100, 10000)->Complexity(benchmark::oN);
 
+BENCHMARK_REGISTER_F(IndexFixture, HnswIndex_Search)
+    ->RangeMultiplier(10)->Range(100, 10000)->Complexity(benchmark::oLogN);
 
 BENCHMARK_MAIN();
