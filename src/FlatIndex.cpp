@@ -1,6 +1,7 @@
 #include "vectordb/FlatIndex.hpp"
 #include <algorithm>
 #include <queue>
+#include <mutex>
 
 namespace vectordb {
 
