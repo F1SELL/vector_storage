@@ -4,6 +4,7 @@
 #include "Distance.hpp"
 #include <vector>
 #include <shared_mutex>
+#include <mutex>
 
 namespace vectordb {
 
