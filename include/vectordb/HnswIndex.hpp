@@ -3,6 +3,7 @@
 #include "IVectorIndex.hpp"
 #include "Distance.hpp"
 #include <atomic>
+#include <mutex>
 #include <cmath>
 #include <random>
 #include <shared_mutex>
