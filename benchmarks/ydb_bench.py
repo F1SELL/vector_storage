@@ -76,7 +76,6 @@ def main() -> int:
         table_path = f"{args.database.rstrip('/')}/{table_path}"
     table_expr = _quote_ydb_path(table_path)
 
-    # ВОТ ОНО - ГЛАВНОЕ ИСПРАВЛЕНИЕ ЗАПРОСА
     query_text = (
         f"DECLARE $q AS List<Float>;\n"
         f"DECLARE $k AS Uint64;\n"
