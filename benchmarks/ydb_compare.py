@@ -1,10 +1,10 @@
 import argparse
 import json
 import os
+import random
 import statistics
 import sys
 import time
-from typing import Iterable
 
 import ydb
 
@@ -45,19 +45,29 @@ def _local_latency_ms(json_path: str, benchmark_substring: str) -> float:
     return statistics.median(values)
 
 
-def _run_ydb_query(pool: ydb.SessionPool, query: str) -> None:
-    def _execute(session: ydb.Session):
-        return session.transaction().execute(query, commit_tx=True)
-
-    pool.retry_operation_sync(_execute)
+def _make_vector(dim: int, rng: random.Random) -> list[float]:
+    return [rng.random() for _ in range(dim)]
 
 
-def _collect_latencies(pool: ydb.SessionPool, query: str, runs: int) -> Iterable[float]:
-    for _ in range(runs):
-        start = time.perf_counter()
-        _run_ydb_query(pool, query)
-        end = time.perf_counter()
-        yield (end - start) * 1000.0
+def _collect_latencies(
+    pool: ydb.SessionPool,
+    query: str,
+    params_list: list[dict],
+    runs: int,
+) -> list[float]:
+    latencies: list[float] = []
+
+    def _benchmark(session: ydb.Session):
+        prepared = session.prepare(query)
+        for i in range(runs):
+            params = params_list[i % len(params_list)]
+            start = time.perf_counter()
+            session.transaction().execute(prepared, params, commit_tx=True)
+            end = time.perf_counter()
+            latencies.append((end - start) * 1000.0)
+
+    pool.retry_operation_sync(_benchmark)
+    return latencies
 
 
 def main() -> int:
@@ -66,6 +76,9 @@ def main() -> int:
     parser.add_argument("--max-ratio", type=float, default=1.15, help="Max allowed local/YDB ratio")
     parser.add_argument("--runs", type=int, default=30, help="Number of YDB query runs")
     parser.add_argument("--benchmark-name", default="HnswIndex_Search", help="Benchmark name substring")
+    parser.add_argument("--query-dim", type=int, default=128, help="Query vector dimension")
+    parser.add_argument("--query-k", type=int, default=10, help="Top-k for ANN query")
+    parser.add_argument("--query-seed", type=int, default=42, help="Random seed for query vectors")
     args = parser.parse_args()
 
     endpoint = os.environ.get("YDB_ENDPOINT")
@@ -86,7 +99,17 @@ def main() -> int:
     driver.wait(fail_fast=True, timeout=10)
     pool = ydb.SessionPool(driver)
 
-    latencies = list(_collect_latencies(pool, query, args.runs))
+    rng = random.Random(args.query_seed)
+    query_vectors = [_make_vector(args.query_dim, rng) for _ in range(args.runs)]
+    params_list = [
+        {
+            "$q": vec,
+            "$k": args.query_k,
+        }
+        for vec in query_vectors
+    ]
+
+    latencies = _collect_latencies(pool, query, params_list, args.runs)
     ydb_mean = statistics.mean(latencies)
     ydb_median = statistics.median(latencies)
 
